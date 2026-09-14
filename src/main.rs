@@ -1,370 +1,103 @@
-use is_executable::is_executable;
-use std::fs::File;
-use std::io::{self, Error, Write, stdin, stdout};
-use std::{env, fs};
-use std::{env::var, path::PathBuf, process::Command, str::FromStr};
-use termion::clear;
-use termion::cursor::{DetectCursorPos, Goto, Left};
-use termion::event::{Event, Key};
-use termion::input::TermRead;
-use termion::raw::IntoRawMode;
-use thiserror::Error;
+mod history;
+use std::{
+    fs::{self, File},
+    io::Write,
+    path::PathBuf,
+};
 
-#[allow(dead_code)]
-enum KindofCmd {
-    Builtin(Builtins),
-    External(PathBuf),
+use crate::{
+    cmd_parser::Command,
+    cmd_parser::OutputDirection::{self},
+    history::HistHandling,
+};
+
+mod builtin_cmd;
+
+mod userinput;
+use userinput::get_userinput;
+
+mod cmd_parser;
+
+mod external_cmd;
+
+#[derive(Debug)]
+struct OutputStrings {
+    out: String,
+    err: String,
 }
 
-impl FromStr for KindofCmd {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(builtin) = s.parse::<Builtins>() {
-            return Ok(KindofCmd::Builtin(builtin));
+impl OutputStrings {
+    fn write(&self, out_direction: &OutputDirection, err_direction: &OutputDirection) {
+        match out_direction {
+            OutputDirection::Terminal => print!("{}", self.out),
+            OutputDirection::File(path) => {
+                fs::write(path, &self.out).expect("Failed to write to file")
+            }
+            OutputDirection::Append(path) => Self::append_file(&self.out, path),
         }
-        if let Some(path_buf) = get_cmd_from_path(s) {
-            return Ok(KindofCmd::External(path_buf));
-        }
-        Err(())
-    }
-}
-
-enum Builtins {
-    Echo,
-    Exit,
-    Type,
-    Pwd,
-    Cd,
-    History,
-}
-
-impl FromStr for Builtins {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "echo" => Ok(Builtins::Echo),
-            "exit" => Ok(Builtins::Exit),
-            "type" => Ok(Builtins::Type),
-            "pwd" => Ok(Builtins::Pwd),
-            "cd" => Ok(Builtins::Cd),
-            "history" => Ok(Builtins::History),
-            _ => Err(()),
+        match err_direction {
+            OutputDirection::Terminal => eprint!("{}", self.err),
+            OutputDirection::File(path) => {
+                fs::write(path, &self.err).expect("Failed to write to file")
+            }
+            OutputDirection::Append(path) => Self::append_file(&self.err, path),
         }
     }
-}
-
-struct CmdHistory {
-    data: Vec<String>,
-    line_written_to_file: Option<usize>,
-}
-
-trait HistHandling {
-    fn show(&self);
-    fn show_last(&self, num_entry_toshow: usize);
-    fn read_in(&mut self, path: &str) -> Result<usize, io::Error>;
-    fn write_to(&mut self, path: &str);
-    fn append_to(&mut self, path: &str);
-    fn get_from_latest(&self, entry_num: usize) -> Option<String>;
-}
-
-impl HistHandling for CmdHistory {
-    fn show(&self) {
-        self.show_last(self.data.len());
-    }
-
-    fn show_last(&self, no_entry_toshow: usize) {
-        let from_index = self.data.len() - no_entry_toshow;
-        for (current_index, entry) in self.data[from_index..].iter().enumerate() {
-            println!("{:>5} {}", current_index + 1 + from_index, entry);
-        }
-    }
-
-    fn write_to(&mut self, path: &str) {
-        let history_str = self.data.join("\n") + "\n";
-        fs::write(path, history_str).expect("Failed to write to history file!");
-        self.line_written_to_file = Some(self.data.len() - 1)
-    }
-
-    fn append_to(&mut self, path: &str) {
-        let write_from = match self.line_written_to_file {
-            None => 0,
-            Some(n) => n + 1,
-        };
-        let history_str = self.data[write_from..].join("\n") + "\n";
+    fn append_file(str: &str, path: &PathBuf) {
         let mut f = File::options()
             .append(true)
             .open(path)
-            .expect("Failed to open history file!");
-        write!(&mut f, "{}", history_str).expect("Failed to append to history file!");
-        self.line_written_to_file = Some(self.data.len() - 1)
+            .expect("Failed to open file!");
+        write!(&mut f, "{}", str).expect("Failed to append to file");
     }
-
-    fn read_in(&mut self, path: &str) -> Result<usize, io::Error> {
-        //Don't append an empty file
-        let metadata = fs::metadata(path)?;
-        if metadata.len() == 0 {
-            return Err(Error::new(io::ErrorKind::Other, "File is empty"));
+    fn from_out(out: &str) -> Self {
+        let line_end = if !out.is_empty() && !out.ends_with("\n") {
+            "\n"
+        } else {
+            ""
+        };
+        Self {
+            out: out.to_string() + line_end,
+            err: "".to_string(),
         }
-
-        let mut history_file_content: Vec<String> = fs::read_to_string(path)?
-            .trim()
-            .split("\n")
-            .map(|s| s.to_owned())
-            .collect();
-        self.data.append(&mut history_file_content);
-        Ok(self.data.len())
     }
-
-    fn get_from_latest(&self, entry_num: usize) -> Option<String> {
-        if (self.data.len() as i64 - entry_num as i64 - 1) < 0 {
-            return None;
+    fn from_err(err: &str) -> Self {
+        let line_end = if !err.is_empty() && !err.ends_with("\n") {
+            "\n"
+        } else {
+            ""
+        };
+        Self {
+            out: "".to_string(),
+            err: err.to_string() + line_end,
         }
-        let from_index = self.data.len() - entry_num - 1;
-        Some(self.data[from_index].to_string())
-        //TODO: Implement None if i is to high
     }
 }
 
 fn main() {
-    let mut cmd_history = create_init_cmd_history();
+    let mut cmd_history = history::CmdHistory::init();
 
     loop {
         let user_input_split = get_userinput(&mut cmd_history);
         if user_input_split.len() == 0 {
             continue;
         }
-        let command = user_input_split[0].parse::<KindofCmd>();
-        match command {
-            Err(_) => println!("{}: command not found", &user_input_split[0]),
-            Ok(KindofCmd::Builtin(cmd)) => match cmd {
-                Builtins::Echo => builtin_echo(user_input_split),
-                Builtins::Exit => builtin_exit(&mut cmd_history),
-                Builtins::Type => builtin_type(user_input_split),
-                Builtins::Pwd => builtin_pwd(),
-                Builtins::Cd => builtin_cd(user_input_split),
-                Builtins::History => builtin_history(user_input_split, &mut cmd_history),
+
+        let command = cmd_parser::Command::parse(user_input_split.as_ref());
+        match &command {
+            Err(e) => {
+                OutputStrings::from_err(&(e.to_string() + "\n"))
+                    .write(&OutputDirection::Terminal, &OutputDirection::Terminal);
+            }
+            Ok(cmd) => match &cmd.cmd {
+                cmd_parser::CommandKind::Builtin(builtin_cmd) => {
+                    OutputStrings::from_out(&builtin_cmd.execute(&cmd.args, &mut cmd_history))
+                        .write(&cmd.out_direct, &cmd.out_direct);
+                }
+                cmd_parser::CommandKind::External(_) => {
+                    external_cmd::run(cmd).write(&cmd.out_direct, &cmd.err_direct)
+                }
             },
-            Ok(KindofCmd::External(_)) => run_external_cmd(user_input_split),
-        }
-    }
-}
-
-fn create_init_cmd_history() -> CmdHistory {
-    let mut cmd_history = CmdHistory {
-        data: Vec::new(),
-        line_written_to_file: None,
-    };
-
-    if let Ok(histfile) = var("HISTFILE") {
-        if let Ok(n) = cmd_history.read_in(&histfile) {
-            cmd_history.line_written_to_file = Some(n - 1);
-        }
-    };
-    cmd_history
-}
-
-fn get_userinput(cmd_history: &mut CmdHistory) -> Vec<String> {
-    print!("$ ");
-    let stdin = stdin();
-    let mut stdout = stdout().into_raw_mode().unwrap();
-    stdout.flush().unwrap();
-
-    let mut user_input = String::new();
-    let mut last_cmd_counter = 0;
-    for evt in stdin.events() {
-        let evt = evt.unwrap();
-        match evt {
-            Event::Key(Key::Char('\n')) => {
-                user_input.push('\n');
-                let (_, row) = stdout.cursor_pos().unwrap();
-                _ = write!(stdout, "{}", Goto(0, row + 1));
-                stdout.flush().unwrap();
-                break;
-            }
-            Event::Key(Key::Left) => {
-                let (col, row) = stdout.cursor_pos().unwrap();
-                if col <= 3 {
-                    continue; //Dont delete the Prompt on Screen
-                }
-                _ = write!(stdout, "{}", Goto(col - 1, row))
-            }
-            Event::Key(Key::Up) => {
-                if let Some(cmd_string) = cmd_history.get_from_latest(last_cmd_counter) {
-                    user_input.clear();
-                    user_input += &cmd_string[..];
-                    let (_, row) = stdout.cursor_pos().unwrap();
-                    _ = write!(
-                        stdout,
-                        "{}{}$ {}",
-                        clear::CurrentLine,
-                        Goto(0, row),
-                        cmd_string
-                    );
-                    stdout.flush().unwrap();
-                    last_cmd_counter += 1;
-                }
-            }
-            Event::Key(Key::Backspace) => {
-                user_input.pop();
-                let (col, row) = stdout.cursor_pos().unwrap();
-                if col <= 3 {
-                    continue; //Dont delete the Prompt on Screen
-                }
-                _ = write!(stdout, "{}{}", Goto(col - 1, row), clear::AfterCursor,)
-            }
-            Event::Key(Key::Char(char)) => {
-                user_input.push(char);
-                _ = write!(stdout, "{}", char,);
-                stdout.flush().unwrap()
-            }
-            _ => continue,
-        }
-    }
-
-    user_input = user_input.trim().to_string();
-    cmd_history.data.push(user_input.to_owned());
-
-    user_input.split_whitespace().map(String::from).collect()
-}
-
-fn get_cmd_from_path(cmd: &str) -> Option<PathBuf> {
-    let path = var("PATH").expect("No $PATH found.");
-    for entry in path.split(":") {
-        let full_cmd = entry.to_owned() + "/" + cmd;
-        if is_executable(&full_cmd) {
-            return Some(PathBuf::from(full_cmd));
-        }
-    }
-    None
-}
-
-fn run_external_cmd(args: Vec<String>) {
-    let output = Command::new(&args[0])
-        .args(&args[1..])
-        .output()
-        .expect("failed to run process");
-    let output_msg = String::from_utf8(output.stdout);
-    print!("{}", output_msg.unwrap())
-}
-
-// Builtin commands implementation starts here
-
-fn builtin_cd(user_str: Vec<String>) {
-    if user_str.len() == 1 {
-        return;
-    }
-    let path_str = match &user_str[1][..] {
-        "~" => var("HOME").expect("No $HOME found."),
-        _ => user_str[1].to_string(),
-    };
-
-    if let Err(_) = env::set_current_dir(&path_str) {
-        println!("cd: {}: No such file or directory", path_str)
-    }
-}
-
-fn builtin_echo(user_str: Vec<String>) {
-    for ele in &user_str[1..] {
-        print!("{} ", ele)
-    }
-    println!()
-}
-
-fn builtin_exit(cmd_history: &mut CmdHistory) {
-    if let Ok(histfile) = var("HISTFILE") {
-        cmd_history.write_to(&histfile);
-    }
-    std::process::exit(0)
-}
-
-fn builtin_history(user_str: Vec<String>, cmd_history: &mut CmdHistory) {
-    match HistoryArgs::new(user_str) {
-        Err(e) => {
-            println!("{}", e);
-            return;
-        }
-        Ok(HistoryArgs::Show) => cmd_history.show(),
-        Ok(HistoryArgs::ShowLast(n)) => cmd_history.show_last(n),
-        Ok(HistoryArgs::ReadHistory(path)) => {
-            cmd_history
-                .read_in(&path)
-                .expect("Couldn't read Histfile at given path");
-        }
-        Ok(HistoryArgs::WriteHistory(path)) => cmd_history.write_to(&path),
-        Ok(HistoryArgs::AppendHistory(path)) => cmd_history.append_to(&path),
-    }
-    enum HistoryArgs {
-        Show,
-        ShowLast(usize),
-        ReadHistory(String),
-        WriteHistory(String),
-        AppendHistory(String),
-    }
-
-    impl HistoryArgs {
-        fn new(user_str: Vec<String>) -> Result<HistoryArgs, HistoryArgErrors> {
-            if user_str.len() == 1 {
-                return Ok(HistoryArgs::Show);
-            }
-            match &user_str[1][..] {
-                "-r" => {
-                    if user_str.len() >= 3 {
-                        return Ok(HistoryArgs::ReadHistory(user_str[2].to_string()));
-                    } else {
-                        return Err(HistoryArgErrors::MissingPathArgument(
-                            "Usage: history -r <Path_to_History>".to_string(),
-                        ));
-                    }
-                }
-                "-w" => {
-                    if user_str.len() >= 3 {
-                        return Ok(HistoryArgs::WriteHistory(user_str[2].to_string()));
-                    } else {
-                        return Err(HistoryArgErrors::MissingPathArgument(
-                            "Usage: history -w <Path_to_History>".to_string(),
-                        ));
-                    }
-                }
-                "-a" => {
-                    if user_str.len() >= 3 {
-                        return Ok(HistoryArgs::AppendHistory(user_str[2].to_string()));
-                    } else {
-                        return Err(HistoryArgErrors::MissingPathArgument(
-                            "Usage: history -a <Path_to_History>".to_string(),
-                        ));
-                    }
-                }
-                n => match n.parse::<usize>() {
-                    Ok(val) => return Ok(HistoryArgs::ShowLast(val)),
-                    Err(_) => return Err(HistoryArgErrors::NoIntArg),
-                },
-            };
-        }
-    }
-
-    #[derive(Error, Debug)]
-    enum HistoryArgErrors {
-        #[error("Missing Path Argument: {0}")]
-        MissingPathArgument(String),
-
-        #[error("Number of Entrys to Show must be Integer")]
-        NoIntArg,
-    }
-}
-
-fn builtin_pwd() {
-    println!("{}", env::current_dir().expect("pwd failed").display())
-}
-
-fn builtin_type(str_split: Vec<String>) {
-    if let Ok(_) = str_split[1].parse::<Builtins>() {
-        println!("{} is a shell builtin", &str_split[1]);
-        return;
-    }
-    match get_cmd_from_path(&str_split[1]) {
-        Some(path) => println!("{} is {}", str_split[1], path.display()),
-        None => println!("{}: not found", str_split[1]),
+        };
     }
 }
