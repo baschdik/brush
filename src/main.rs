@@ -1,24 +1,21 @@
-mod history;
 use std::{
     fs::{self, File},
     io::Write,
     path::PathBuf,
 };
 
+mod builtin_cmd;
+mod cmd_parser;
+mod external_cmd;
+mod history;
+mod tokenizer;
+mod userinput;
+
 use crate::{
-    cmd_parser::Command,
     cmd_parser::OutputDirection::{self},
     history::HistHandling,
 };
-
-mod builtin_cmd;
-
-mod userinput;
 use userinput::get_userinput;
-
-mod cmd_parser;
-
-mod external_cmd;
 
 #[derive(Debug)]
 struct OutputStrings {
@@ -46,6 +43,7 @@ impl OutputStrings {
     fn append_file(str: &str, path: &PathBuf) {
         let mut f = File::options()
             .append(true)
+            .create(true)
             .open(path)
             .expect("Failed to open file!");
         write!(&mut f, "{}", str).expect("Failed to append to file");
@@ -78,10 +76,14 @@ fn main() {
     let mut cmd_history = history::CmdHistory::init();
 
     loop {
-        let user_input_split = get_userinput(&mut cmd_history);
-        if user_input_split.len() == 0 {
+        let user_input = get_userinput(&mut cmd_history);
+        if user_input.len() == 0 {
             continue;
+            //break; //DEBUG
         }
+
+        let user_input_split = tokenizer::tokenize(&user_input);
+        //continue;
 
         let command = cmd_parser::Command::parse(user_input_split.as_ref());
         match &command {
@@ -92,7 +94,7 @@ fn main() {
             Ok(cmd) => match &cmd.cmd {
                 cmd_parser::CommandKind::Builtin(builtin_cmd) => {
                     OutputStrings::from_out(&builtin_cmd.execute(&cmd.args, &mut cmd_history))
-                        .write(&cmd.out_direct, &cmd.out_direct);
+                        .write(&cmd.out_direct, &cmd.err_direct);
                 }
                 cmd_parser::CommandKind::External(_) => {
                     external_cmd::run(cmd).write(&cmd.out_direct, &cmd.err_direct)
