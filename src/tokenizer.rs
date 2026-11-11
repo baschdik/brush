@@ -65,11 +65,11 @@ pub fn tokenize(input: &str) -> Result<CmdPipelines, CommandErrors> {
             }
             Quotation::Double => {
                 if c == '\\' {
-                    //Escape only " and \
+                    //Escape only " and \, otherwise the backslash is kept literally
                     processed.last_mut().unwrap().push(
                         input_iter
                             .next_if(|c| matches!(c, '"' | '\\'))
-                            .unwrap_or_default(),
+                            .unwrap_or('\\'),
                     );
                 } else if c == '"' {
                     //Concatenate adjacent quoted strings:
