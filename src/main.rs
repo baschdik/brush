@@ -22,9 +22,7 @@ fn main() {
             continue;
         }
 
-        let user_input_tokens = tokenizer::tokenize(&user_input);
-
-        match cmd_parser::parse_cmd_set(&user_input_tokens) {
+        match tokenizer::tokenize(&user_input) {
             Err(e) => OutputStrings::error(e.to_string()).write(),
             Ok(cmds) => {
                 for pipeline in cmds {

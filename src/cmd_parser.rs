@@ -114,34 +114,5 @@ impl UserCommand {
     }
 }
 
-type CmdPipeline = Vec<UserCommand>;
-type CmdPipelines = Vec<CmdPipeline>;
-
-pub fn parse_cmd_set(tokens: &[String]) -> Result<CmdPipelines, CommandErrors> {
-    // Accept a trailing semicolon.
-    let tokens = if tokens.last().is_some_and(|t| t == ";") {
-        &tokens[..tokens.len() - 1]
-    } else {
-        tokens
-    };
-
-    if tokens.is_empty() {
-        return Err(CommandErrors::NoInput);
-    }
-
-    tokens
-        .split(|token| token == ";")
-        .map(|pipeline| {
-            pipeline
-                .split(|token| token == "|")
-                .map(|cmd| {
-                    if cmd.is_empty() {
-                        return Err(CommandErrors::NoInput);
-                    }
-
-                    UserCommand::parse(cmd)
-                })
-                .collect()
-        })
-        .collect()
-}
+pub type CmdPipeline = Vec<UserCommand>;
+pub type CmdPipelines = Vec<CmdPipeline>;
