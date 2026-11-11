@@ -1,4 +1,4 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{path::PathBuf, process::Command, str::FromStr};
 use thiserror::Error;
 
 use crate::{
@@ -6,13 +6,22 @@ use crate::{
     external_cmd::{self},
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum CommandKind {
     Builtin(builtin_cmd::Builtins),
     External(PathBuf),
 }
 
-#[derive(Debug)]
+impl CommandKind {
+    pub fn has_sideeffects(&self) -> bool {
+        match self {
+            CommandKind::Builtin(builtin) => builtin.has_sideeffects(),
+            CommandKind::External(_) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutputDirection {
     Terminal,
     File(PathBuf),
@@ -20,7 +29,7 @@ pub enum OutputDirection {
 }
 
 #[derive(Debug)]
-pub struct Command {
+pub struct UserCommand {
     pub cmd: CommandKind,
     pub args: Vec<String>,
     pub out_direct: OutputDirection,
@@ -37,7 +46,7 @@ pub enum CommandErrors {
     MissingRedirectionPath(String),
 }
 
-impl Command {
+impl UserCommand {
     pub fn parse(input: &[String]) -> Result<Self, CommandErrors> {
         // parsing...
 
@@ -91,11 +100,56 @@ impl Command {
             }
         }
 
-        Ok(Command {
+        Ok(UserCommand {
             cmd,
             args,
             out_direct: stdout,
             err_direct: stderr,
         })
     }
+    pub fn is_builtin(&self) -> bool {
+        matches!(self.cmd, CommandKind::Builtin(_))
+    }
+
+    /// Builds the process for an external command. Panics on builtins.
+    pub fn to_command(&self) -> Command {
+        let CommandKind::External(cmd_path) = &self.cmd else {
+            panic!("to_command called on builtin command");
+        };
+        let mut process = Command::new(cmd_path.file_name().expect("No filename in command path"));
+        process.args(&self.args);
+        process
+    }
+}
+
+type CmdPipeline = Vec<UserCommand>;
+type CmdPipelines = Vec<CmdPipeline>;
+
+pub fn parse_cmd_set(tokens: &[String]) -> Result<CmdPipelines, CommandErrors> {
+    // Accept a trailing semicolon.
+    let tokens = if tokens.last().is_some_and(|t| t == ";") {
+        &tokens[..tokens.len() - 1]
+    } else {
+        tokens
+    };
+
+    if tokens.is_empty() {
+        return Err(CommandErrors::NoInput);
+    }
+
+    tokens
+        .split(|token| token == ";")
+        .map(|pipeline| {
+            pipeline
+                .split(|token| token == "|")
+                .map(|cmd| {
+                    if cmd.is_empty() {
+                        return Err(CommandErrors::NoInput);
+                    }
+
+                    UserCommand::parse(cmd)
+                })
+                .collect()
+        })
+        .collect()
 }

@@ -5,7 +5,7 @@ enum Quotation {
     Double,
 }
 
-pub fn tokenize(input: &String) -> Vec<String> {
+pub fn tokenize(input: &str) -> Vec<String> {
     let mut processed = vec!["".to_string()];
     let mut qoutation_status = Quotation::No;
 
@@ -13,16 +13,21 @@ pub fn tokenize(input: &String) -> Vec<String> {
     while let Some(c) = input_iter.next() {
         match qoutation_status {
             Quotation::No => {
-                if c.is_whitespace() {
+                if c == '\\' {
+                    //escaping
+                    processed
+                        .last_mut()
+                        .unwrap()
+                        .push(input_iter.next().unwrap_or_default());
+                } else if c.is_whitespace() {
                     processed.push("".to_string());
-                    //remove extra whitespace:
-                    while input_iter.next_if(|c| c.is_whitespace()).is_some() {}
+                } else if c == '|' || c == ';' {
+                    processed.push(c.to_string());
                 } else if c == '\'' {
                     //Ignore Empty quotes '':
                     if input_iter.next_if(|c| *c == '\'').is_some() {
                         continue;
                     }
-
                     qoutation_status = Quotation::Single;
                 } else if c == '"' {
                     //Ignore Empty quotes "":
@@ -46,7 +51,14 @@ pub fn tokenize(input: &String) -> Vec<String> {
                 }
             }
             Quotation::Double => {
-                if c == '"' {
+                if c == '\\' {
+                    //Escape only " and \
+                    processed.last_mut().unwrap().push(
+                        input_iter
+                            .next_if(|c| matches!(c, '"' | '\\'))
+                            .unwrap_or_default(),
+                    );
+                } else if c == '"' {
                     //Concatenate adjacent quoted strings:
                     if input_iter.next_if(|c| *c == '\'').is_some() {
                         continue;
@@ -59,6 +71,11 @@ pub fn tokenize(input: &String) -> Vec<String> {
         }
     }
 
-    println!("Final: {:?}", processed); //DEBUG
+    processed = processed
+        .iter()
+        .filter(|c| !c.is_empty())
+        .map(|c| c.to_string())
+        .collect();
+    //println!("Final: {:?}", processed); //DEBUG
     processed
 }

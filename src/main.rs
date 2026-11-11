@@ -1,105 +1,42 @@
-use std::{
-    fs::{self, File},
-    io::Write,
-    path::PathBuf,
-};
+//! BRUSH - Baschdik's Rust-based Shell
+//!
+//! A simple Unix shell implementation
 
 mod builtin_cmd;
 mod cmd_parser;
 mod external_cmd;
 mod history;
+mod output;
+mod pipeline;
 mod tokenizer;
 mod userinput;
 
 use crate::{
-    cmd_parser::OutputDirection::{self},
-    history::HistHandling,
+    cmd_parser::OutputDirection, history::HistHandling, output::OutputStrings,
+    pipeline::run_pipeline,
 };
 use userinput::get_userinput;
 
-#[derive(Debug)]
-struct OutputStrings {
-    out: String,
-    err: String,
-}
-
-impl OutputStrings {
-    fn write(&self, out_direction: &OutputDirection, err_direction: &OutputDirection) {
-        match out_direction {
-            OutputDirection::Terminal => print!("{}", self.out),
-            OutputDirection::File(path) => {
-                fs::write(path, &self.out).expect("Failed to write to file")
-            }
-            OutputDirection::Append(path) => Self::append_file(&self.out, path),
-        }
-        match err_direction {
-            OutputDirection::Terminal => eprint!("{}", self.err),
-            OutputDirection::File(path) => {
-                fs::write(path, &self.err).expect("Failed to write to file")
-            }
-            OutputDirection::Append(path) => Self::append_file(&self.err, path),
-        }
-    }
-    fn append_file(str: &str, path: &PathBuf) {
-        let mut f = File::options()
-            .append(true)
-            .create(true)
-            .open(path)
-            .expect("Failed to open file!");
-        write!(&mut f, "{}", str).expect("Failed to append to file");
-    }
-    fn from_out(out: &str) -> Self {
-        let line_end = if !out.is_empty() && !out.ends_with("\n") {
-            "\n"
-        } else {
-            ""
-        };
-        Self {
-            out: out.to_string() + line_end,
-            err: "".to_string(),
-        }
-    }
-    fn from_err(err: &str) -> Self {
-        let line_end = if !err.is_empty() && !err.ends_with("\n") {
-            "\n"
-        } else {
-            ""
-        };
-        Self {
-            out: "".to_string(),
-            err: err.to_string() + line_end,
-        }
-    }
-}
-
 fn main() {
     let mut cmd_history = history::CmdHistory::init();
-
     loop {
         let user_input = get_userinput(&mut cmd_history);
-        if user_input.len() == 0 {
+        if user_input.is_empty() {
             continue;
-            //break; //DEBUG
         }
 
-        let user_input_split = tokenizer::tokenize(&user_input);
-        //continue;
+        let user_input_tokens = tokenizer::tokenize(&user_input);
 
-        let command = cmd_parser::Command::parse(user_input_split.as_ref());
-        match &command {
+        match cmd_parser::parse_cmd_set(&user_input_tokens) {
             Err(e) => {
-                OutputStrings::from_err(&(e.to_string() + "\n"))
-                    .write(&OutputDirection::Terminal, &OutputDirection::Terminal);
+                OutputStrings::from_err(&(e.to_string() + "\n"), &OutputDirection::Terminal)
+                    .write();
             }
-            Ok(cmd) => match &cmd.cmd {
-                cmd_parser::CommandKind::Builtin(builtin_cmd) => {
-                    OutputStrings::from_out(&builtin_cmd.execute(&cmd.args, &mut cmd_history))
-                        .write(&cmd.out_direct, &cmd.err_direct);
+            Ok(cmds) => {
+                for pipeline in cmds {
+                    run_pipeline(pipeline, &mut cmd_history).write();
                 }
-                cmd_parser::CommandKind::External(_) => {
-                    external_cmd::run(cmd).write(&cmd.out_direct, &cmd.err_direct)
-                }
-            },
-        };
+            }
+        }
     }
 }
