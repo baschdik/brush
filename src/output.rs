@@ -1,13 +1,12 @@
 use std::{
     fs::{self, File},
-    io::Write,
-    path::PathBuf,
+    io::{self, Write},
 };
 
-use crate::cmd_parser::OutputDirection;
+use crate::cmd_parser::{OutputDirection, UserCommand};
 
-/// Holds out and err strings
-#[derive(Debug)]
+/// Output of a command (or pipeline) together with where it has to go.
+#[derive(Debug, Default)]
 pub struct OutputStrings {
     pub out: String,
     pub err: String,
@@ -15,69 +14,55 @@ pub struct OutputStrings {
     pub err_direction: OutputDirection,
 }
 
-impl Default for OutputStrings {
-    fn default() -> Self {
-        OutputStrings {
-            out: "".to_string(),
-            err: "".to_string(),
-            out_direction: OutputDirection::Terminal,
-            err_direction: OutputDirection::Terminal,
+impl OutputStrings {
+    /// Output that goes where the redirections of `cmd` point to.
+    pub fn new(out: String, err: String, cmd: &UserCommand) -> Self {
+        Self {
+            out,
+            err,
+            out_direction: cmd.out_direct.clone(),
+            err_direction: cmd.err_direct.clone(),
+        }
+    }
+
+    /// An error message of the shell itself, printed to the terminal.
+    pub fn error(err: impl Into<String>) -> Self {
+        Self {
+            err: ensure_newline(err.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Writes output and error independently in their direction.
+    /// A redirection target file is created even if the text is empty.
+    pub fn write(&self) {
+        write_to(&self.out, &self.out_direction, &mut io::stdout());
+        write_to(&self.err, &self.err_direction, &mut io::stderr());
+    }
+}
+
+fn write_to(text: &str, direction: &OutputDirection, terminal: &mut impl Write) {
+    match direction {
+        OutputDirection::Terminal => {
+            let _ = terminal.write_all(text.as_bytes());
+        }
+        OutputDirection::File(path) => fs::write(path, text).expect("Failed to write to file"),
+        OutputDirection::Append(path) => {
+            let mut f = File::options()
+                .append(true)
+                .create(true)
+                .open(path)
+                .expect("Failed to open file!");
+            f.write_all(text.as_bytes())
+                .expect("Failed to append to file");
         }
     }
 }
 
-impl OutputStrings {
-    /// Writes Output and Error independently in the given direction
-    pub fn write(&self) {
-        match &self.out_direction {
-            OutputDirection::Terminal => print!("{}", self.out),
-            OutputDirection::File(path) => {
-                fs::write(path, &self.out).expect("Failed to write to file")
-            }
-            OutputDirection::Append(path) => Self::append_file(&self.out, path),
-        }
-        match &self.err_direction {
-            OutputDirection::Terminal => eprint!("{}", self.err),
-            OutputDirection::File(path) => {
-                fs::write(path, &self.err).expect("Failed to write to file")
-            }
-            OutputDirection::Append(path) => Self::append_file(&self.err, path),
-        }
+/// Appends a line break to non-empty text that doesn't end with one.
+pub fn ensure_newline(mut text: String) -> String {
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
     }
-    fn append_file(str: &str, path: &PathBuf) {
-        let mut f = File::options()
-            .append(true)
-            .create(true)
-            .open(path)
-            .expect("Failed to open file!");
-        write!(&mut f, "{}", str).expect("Failed to append to file");
-    }
-    /// Creates OutputStrings struct if only Output is given (no error)
-    pub fn from_out(out: &str, out_direction: &OutputDirection) -> Self {
-        let line_end = if !out.is_empty() && !out.ends_with("\n") {
-            "\n"
-        } else {
-            ""
-        };
-        Self {
-            out: out.to_string() + line_end,
-            err: "".to_string(),
-            out_direction: out_direction.to_owned(),
-            err_direction: OutputDirection::Terminal,
-        }
-    }
-    /// Creates OutputStrings struct if only error is given (no output)
-    pub fn from_err(err: &str, err_direction: &OutputDirection) -> Self {
-        let line_end = if !err.is_empty() && !err.ends_with("\n") {
-            "\n"
-        } else {
-            ""
-        };
-        Self {
-            out: "".to_string(),
-            err: err.to_string() + line_end,
-            out_direction: OutputDirection::Terminal,
-            err_direction: err_direction.to_owned(),
-        }
-    }
+    text
 }

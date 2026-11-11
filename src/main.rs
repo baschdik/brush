@@ -11,10 +11,7 @@ mod pipeline;
 mod tokenizer;
 mod userinput;
 
-use crate::{
-    cmd_parser::OutputDirection, history::HistHandling, output::OutputStrings,
-    pipeline::run_pipeline,
-};
+use crate::{history::HistHandling, output::OutputStrings, pipeline::run_pipeline};
 use userinput::get_userinput;
 
 fn main() {
@@ -28,13 +25,10 @@ fn main() {
         let user_input_tokens = tokenizer::tokenize(&user_input);
 
         match cmd_parser::parse_cmd_set(&user_input_tokens) {
-            Err(e) => {
-                OutputStrings::from_err(&(e.to_string() + "\n"), &OutputDirection::Terminal)
-                    .write();
-            }
+            Err(e) => OutputStrings::error(e.to_string()).write(),
             Ok(cmds) => {
                 for pipeline in cmds {
-                    run_pipeline(pipeline, &mut cmd_history).write();
+                    run_pipeline(&pipeline, &mut cmd_history).write();
                 }
             }
         }

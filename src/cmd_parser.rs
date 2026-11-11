@@ -12,17 +12,9 @@ pub enum CommandKind {
     External(PathBuf),
 }
 
-impl CommandKind {
-    pub fn has_sideeffects(&self) -> bool {
-        match self {
-            CommandKind::Builtin(builtin) => builtin.has_sideeffects(),
-            CommandKind::External(_) => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum OutputDirection {
+    #[default]
     Terminal,
     File(PathBuf),
     Append(PathBuf),
