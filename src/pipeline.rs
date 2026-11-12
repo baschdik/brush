@@ -7,7 +7,7 @@
 //! connected by OS pipes.
 
 use std::{
-    io::{Read, Write},
+    io::Write,
     process::{Child, Stdio},
     thread,
 };
@@ -15,78 +15,82 @@ use std::{
 use crate::{
     cmd_parser::{CommandKind, OutputDirection, UserCommand},
     history::CmdHistory,
-    output::{OutputStrings, ensure_newline},
+    output::{self, ensure_newline},
 };
 
 /// Where the stdout of the last process in an external chain goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChainStdout {
-    /// Directly to the terminal. The process sees a tty and line-buffers.
-    Terminal,
-    /// Read by the shell and returned, e.g. for redirection into a file.
-    Capture,
+    /// Redirect depending on the current Cmd.
+    AsRedirected,
     /// Thrown away, because a builtin (which ignores stdin) comes next.
     /// The pipe is closed right away, so a writer gets SIGPIPE like in bash
     /// (`yes | echo hi` terminates).
     Discard,
 }
 
-pub fn run_pipeline(pipeline: &[UserCommand], cmd_history: &mut CmdHistory) -> OutputStrings {
+pub fn run_pipeline(pipeline: &[UserCommand], cmd_history: &mut CmdHistory) -> Result<(), String> {
     let in_pipe = pipeline.len() > 1;
     let sections: Vec<_> = pipeline
         .chunk_by(|a, b| a.is_builtin() == b.is_builtin())
         .collect();
 
-    let mut prev: Option<OutputStrings> = None;
+    let mut prev: Option<String> = None;
     for (i, section) in sections.iter().enumerate() {
         let is_last = i == sections.len() - 1;
         let output = if section[0].is_builtin() {
             // Builtins ignore stdin, so only the last one of a section matters.
             let cmd = section.last().expect("chunks are never empty");
-            run_builtin(cmd, in_pipe, cmd_history)
+            let out = run_builtin(cmd, in_pipe, cmd_history);
+            if is_last {
+                match output::get_file_from_direction(&cmd.out_direct) {
+                    None => print!("{}", out),
+                    Some(mut file) => file
+                        .write_all(out.as_bytes())
+                        .expect("Failed to write to file"),
+                };
+                None
+            } else {
+                Some(out)
+            }
         } else {
             // A non-last external section is always followed by a builtin.
             let stdout = if !is_last {
                 ChainStdout::Discard
-            } else if section.last().expect("chunks are never empty").out_direct
-                == OutputDirection::Terminal
-            {
-                ChainStdout::Terminal
             } else {
-                ChainStdout::Capture
+                ChainStdout::AsRedirected
             };
-            let input = prev.as_ref().map(|p| p.out.as_str());
+            let input = prev.as_deref();
             run_chain(section, input, stdout)
         };
-        prev = Some(output);
+        prev = output;
     }
-    prev.unwrap_or_default()
+    prev.map_or(Ok(()), Err)
 }
 
 /// Runs a builtin in the shell process.
 ///
 /// Inside a pipeline, builtins with side effects (`cd`, `exit`, ...) do nothing,
 /// similar to bash running them in a subshell.
-fn run_builtin(cmd: &UserCommand, in_pipe: bool, cmd_history: &mut CmdHistory) -> OutputStrings {
+fn run_builtin(cmd: &UserCommand, in_pipe: bool, cmd_history: &mut CmdHistory) -> String {
     let CommandKind::Builtin(builtin) = &cmd.cmd else {
         unreachable!("run_builtin called with external command");
     };
-    let out = if in_pipe && builtin.has_sideeffects() {
+    if in_pipe && builtin.has_sideeffects() {
         String::new()
     } else {
         ensure_newline(builtin.execute(&cmd.args, cmd_history))
-    };
-    OutputStrings::new(out, String::new(), cmd)
+    }
 }
 
 /// Runs consecutive external commands connected by pipes.
 ///
 /// `input` is fed to the first process; without input it reads from the terminal.
-fn run_chain(cmds: &[UserCommand], input: Option<&str>, stdout: ChainStdout) -> OutputStrings {
-    let last_cmd = cmds.last().expect("chain is never empty");
+/// Returns only Error Strings.
+fn run_chain(cmds: &[UserCommand], input: Option<&str>, stdout: ChainStdout) -> Option<String> {
     let mut children = match spawn_chain(cmds, input.is_some(), stdout) {
         Ok(children) => children,
-        Err(msg) => return OutputStrings::error(msg),
+        Err(msg) => return Some(msg),
     };
     // Feed the input from a separate thread: the first process may block on
     // writing its own output before it has read all of its input.
@@ -101,11 +105,11 @@ fn run_chain(cmds: &[UserCommand], input: Option<&str>, stdout: ChainStdout) -> 
         })
     });
 
-    let output = collect_output(children, last_cmd);
+    wait_on_last(children);
     if let Some(feeder) = feeder {
         let _ = feeder.join();
     }
-    output
+    None
 }
 
 /// Spawns all processes of a chain and connects stdout of each one to stdin
@@ -125,11 +129,15 @@ fn spawn_chain(
             None if pipe_stdin => Stdio::piped(),
             None => Stdio::inherit(),
         });
-        process.stdout(if is_last && stdout == ChainStdout::Terminal {
-            Stdio::inherit()
+        process.stdout(if is_last && stdout == ChainStdout::AsRedirected {
+            match output::get_file_from_direction(&cmd.out_direct) {
+                None => Stdio::inherit(),
+                Some(file) => Stdio::from(file),
+            }
         } else {
             Stdio::piped()
         });
+
         if is_last && cmd.err_direct != OutputDirection::Terminal {
             process.stderr(Stdio::piped());
         }
@@ -152,29 +160,29 @@ fn spawn_chain(
 }
 
 /// Waits for the last process and collects its captured stdout and stderr.
-fn collect_output(mut children: Vec<Child>, last_cmd: &UserCommand) -> OutputStrings {
+fn wait_on_last(mut children: Vec<Child>) {
     let mut last = children.pop().expect("chain is never empty");
 
     // stderr in its own thread, otherwise reading stdout and stderr one after
     // the other can deadlock when the child fills the stderr pipe buffer.
-    let err_reader = last
+    /*let err_reader = last
         .stderr
         .take()
         .map(|e| thread::spawn(move || read_all(e)));
     // None if stdout goes to the terminal (or was discarded).
-    let out = last.stdout.take().map(read_all).unwrap_or_default();
+    let out = last.stdout.take().map(read_all).unwrap_or_default(); */
     let _ = last.wait();
 
     reap(children);
 
-    let err = err_reader
+    /*let err = err_reader
         .map(|h| h.join().unwrap_or_default())
         .unwrap_or_default();
     OutputStrings::new(
         String::from_utf8_lossy(&out).into_owned(),
         String::from_utf8_lossy(&err).into_owned(),
         last_cmd,
-    )
+    )*/
 }
 
 /// Stops earlier stages that are still running (e.g. `tail -f`) once the last
@@ -184,10 +192,4 @@ fn reap(children: Vec<Child>) {
         let _ = child.kill();
         let _ = child.wait();
     }
-}
-
-fn read_all(mut reader: impl Read) -> Vec<u8> {
-    let mut buf = Vec::new();
-    let _ = reader.read_to_end(&mut buf);
-    buf
 }

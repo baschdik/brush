@@ -1,6 +1,30 @@
 use std::mem;
 
-use crate::cmd_parser::{CmdPipeline, CmdPipelines, CommandErrors, UserCommand};
+use crate::cmd_parser::{CommandErrors, UserCommand};
+
+pub type CmdPipelines = Vec<Pipeline>;
+
+#[derive(Default)]
+pub enum RunMode {
+    #[default]
+    Foreground,
+    Background,
+}
+
+#[derive(Default)]
+pub struct Pipeline {
+    pub cmds: Vec<UserCommand>,
+    pub mode: RunMode,
+}
+
+impl Pipeline {
+    fn push(&mut self, cmd: UserCommand) {
+        self.cmds.push(cmd);
+    }
+    fn is_empty(&self) -> bool {
+        self.cmds.is_empty()
+    }
+}
 
 #[derive(Debug)]
 enum Quotation {
@@ -14,7 +38,7 @@ enum Quotation {
 /// Quoted or escaped `|` and `;` are ordinary characters.
 pub fn tokenize(input: &str) -> Result<CmdPipelines, CommandErrors> {
     let mut pipelines = CmdPipelines::new();
-    let mut pipeline = CmdPipeline::new();
+    let mut pipeline = Pipeline::default();
     // Words of the current command; the last one is the word being read.
     let mut processed = vec!["".to_string()];
     let mut qoutation_status = Quotation::No;
@@ -35,6 +59,10 @@ pub fn tokenize(input: &str) -> Result<CmdPipelines, CommandErrors> {
                     pipeline.push(parse_command(&mut processed)?);
                 } else if c == ';' {
                     pipeline.push(parse_command(&mut processed)?);
+                    pipelines.push(mem::take(&mut pipeline));
+                } else if c == '&' {
+                    pipeline.push(parse_command(&mut processed)?);
+                    pipeline.mode = RunMode::Background;
                     pipelines.push(mem::take(&mut pipeline));
                 } else if c == '\'' {
                     //Ignore Empty quotes '':

@@ -113,6 +113,3 @@ impl UserCommand {
         process
     }
 }
-
-pub type CmdPipeline = Vec<UserCommand>;
-pub type CmdPipelines = Vec<CmdPipeline>;

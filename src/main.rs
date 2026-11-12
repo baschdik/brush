@@ -26,7 +26,10 @@ fn main() {
             Err(e) => OutputStrings::error(e.to_string()).write(),
             Ok(cmds) => {
                 for pipeline in cmds {
-                    run_pipeline(&pipeline, &mut cmd_history).write();
+                    let err_msg = run_pipeline(&pipeline.cmds, &mut cmd_history);
+                    if let Err(e) = err_msg {
+                        eprintln!("{}", e)
+                    }
                 }
             }
         }
