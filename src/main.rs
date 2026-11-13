@@ -35,6 +35,10 @@ fn main() {
     let mut shell_state = ShellState::init();
 
     loop {
+        let reaped_bg_jobs = shell_state.bg_jobs.reap_finished();
+        if let Some(jobs) = reaped_bg_jobs {
+            print!("{}", jobs.show());
+        };
         let user_input = get_userinput(&mut shell_state.cmd_history);
         if user_input.is_empty() {
             continue;

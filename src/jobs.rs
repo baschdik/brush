@@ -9,20 +9,20 @@ pub struct Job {
     status: JobStatus,
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Display)]
 enum JobStatus {
     Running,
     Done,
 }
 
-impl std::fmt::Display for JobStatus {
+/*impl std::fmt::Display for JobStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.pad(match self {
             JobStatus::Running => "Running",
             JobStatus::Done => "Done",
         })
     }
-}
+}*/
 
 pub struct JobsList {
     jobs: Vec<Job>,
@@ -48,6 +48,10 @@ impl JobsList {
                 .pipeline
                 .get_pid()
         )
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.jobs.is_empty()
     }
 
     /// Returns a sorted list of Jobs, but w/o running pipelines
@@ -95,19 +99,18 @@ impl JobsList {
         for job in &self.jobs {
             out.push_str(
                 &format!(
-                    "[{num}]{recent}  {status:width$}{text}\n",
+                    "[{num}]{recent}  {status}                 {text}\n",
                     num = job.number,
                     recent = format_recent(job.number, most_recent_job_no, second_recent_job_no),
                     status = job.status.to_string(),
-                    text = job.text,
-                    width = 24,
+                    text = format_text(&job.text, &job.status) //width = 24,
                 )[..],
             );
         }
         out
     }
 
-    pub fn reap_finished(&mut self) -> JobsList {
+    pub fn reap_finished(&mut self) -> Option<JobsList> {
         let mut done_jobs = JobsList::new();
         for job in self.jobs.extract_if(.., |job| job.pipeline.try_wait()) {
             //wait is blocking, but we are sure that last child has already ended
@@ -119,7 +122,11 @@ impl JobsList {
                 status: JobStatus::Done,
             });
         }
-        done_jobs
+        if done_jobs.is_empty() {
+            None
+        } else {
+            Some(done_jobs)
+        }
     }
 }
 
@@ -130,5 +137,13 @@ fn format_recent(job_no: usize, most_recent: usize, sec_recent: Option<usize>) -
         "-"
     } else {
         " "
+    }
+}
+
+fn format_text(text: &String, status: &JobStatus) -> String {
+    if status == &JobStatus::Done {
+        text.trim_end_matches('&').to_string()
+    } else {
+        text.to_string()
     }
 }
