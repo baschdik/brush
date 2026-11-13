@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::external_cmd;
 use crate::history;
 use crate::history::HistHandling;
+use crate::jobs::JobsList;
 
 #[derive(Debug, EnumIter, PartialEq, Eq)]
 pub enum Builtins {
@@ -69,13 +70,13 @@ impl Builtins {
         names
     }
 
-    pub fn execute(&self, args: &[String], cmd_history: &mut history::CmdHistory) -> String {
+    pub fn execute(&self, args: &[String], shall_state: &mut super::ShellState) -> String {
         match self {
             Builtins::Cd => builtin_cd(args),
             Builtins::Echo => builtin_echo(args),
-            Builtins::Exit => builtin_exit(cmd_history),
-            Builtins::History => builtin_history(args, cmd_history),
-            Builtins::Jobs => builtin_jobs(),
+            Builtins::Exit => builtin_exit(&mut shall_state.cmd_history),
+            Builtins::History => builtin_history(args, &mut shall_state.cmd_history),
+            Builtins::Jobs => builtin_jobs(&mut shall_state.bg_jobs),
             Builtins::Pwd => builtin_pwd(),
             Builtins::Type => builtin_type(args),
         }
@@ -180,8 +181,8 @@ pub fn builtin_history(args: &[String], cmd_history: &mut history::CmdHistory) -
     }
 }
 
-pub fn builtin_jobs() -> String {
-    "".to_string()
+pub fn builtin_jobs(jobs: &mut JobsList) -> String {
+    jobs.show()
 }
 
 pub fn builtin_pwd() -> String {

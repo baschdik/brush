@@ -13,6 +13,7 @@ use std::{
 };
 
 use crate::{
+    ShellState,
     cmd_parser::{CommandKind, OutputDirection, UserCommand},
     history::CmdHistory,
     output::{self, ensure_newline},
@@ -31,7 +32,7 @@ enum ChainStdout {
 
 pub fn start_pipeline(
     pipeline: &[UserCommand],
-    cmd_history: &mut CmdHistory,
+    shall_state: &mut ShellState,
 ) -> Result<RunningPipeline, String> {
     let in_pipe = pipeline.len() > 1;
     let sections: Vec<_> = pipeline
@@ -46,7 +47,7 @@ pub fn start_pipeline(
         let output = if section[0].is_builtin() {
             // Builtins ignore stdin, so only the last one of a section matters.
             let cmd = section.last().expect("chunks are never empty");
-            let out = run_builtin(cmd, in_pipe, cmd_history);
+            let out = run_builtin(cmd, in_pipe, shall_state);
             if is_last {
                 match output::get_file_from_direction(&cmd.out_direct) {
                     None => print!("{}", out),
@@ -84,14 +85,14 @@ pub fn start_pipeline(
 ///
 /// Inside a pipeline, builtins with side effects (`cd`, `exit`, ...) do nothing,
 /// similar to bash running them in a subshell.
-fn run_builtin(cmd: &UserCommand, in_pipe: bool, cmd_history: &mut CmdHistory) -> String {
+fn run_builtin(cmd: &UserCommand, in_pipe: bool, shell_state: &mut ShellState) -> String {
     let CommandKind::Builtin(builtin) = &cmd.cmd else {
         unreachable!("run_builtin called with external command");
     };
     if in_pipe && builtin.has_sideeffects() {
         String::new()
     } else {
-        ensure_newline(builtin.execute(&cmd.args, cmd_history))
+        ensure_newline(builtin.execute(&cmd.args, shell_state))
     }
 }
 

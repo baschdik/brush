@@ -17,11 +17,25 @@ use crate::{
 };
 use userinput::get_userinput;
 
+pub struct ShellState {
+    pub cmd_history: history::CmdHistory,
+    pub bg_jobs: jobs::JobsList,
+}
+
+impl ShellState {
+    fn init() -> Self {
+        ShellState {
+            cmd_history: history::CmdHistory::init(),
+            bg_jobs: jobs::JobsList::new(),
+        }
+    }
+}
+
 fn main() {
-    let mut cmd_history = history::CmdHistory::init();
-    let mut bg_jobs_list = jobs::JobsList::new();
+    let mut shell_state = ShellState::init();
+
     loop {
-        let user_input = get_userinput(&mut cmd_history);
+        let user_input = get_userinput(&mut shell_state.cmd_history);
         if user_input.is_empty() {
             continue;
         }
@@ -32,16 +46,22 @@ fn main() {
                 for pipeline in cmds {
                     match pipeline.mode {
                         RunMode::Foreground => {
-                            let starting_result = start_pipeline(&pipeline.cmds, &mut cmd_history);
+                            let starting_result = start_pipeline(&pipeline.cmds, &mut shell_state);
                             match starting_result {
                                 Ok(pipeline) => pipeline.wait(),
                                 Err(e) => eprintln!("{}", e),
                             }
                         }
                         RunMode::Background => {
-                            let starting_result = start_pipeline(&pipeline.cmds, &mut cmd_history);
+                            let starting_result = start_pipeline(&pipeline.cmds, &mut shell_state);
                             match starting_result {
-                                Ok(pipeline) => bg_jobs_list.add(pipeline), //TODO here: bg_jobs_list.add () ...
+                                Ok(pipeline) => shell_state.bg_jobs.add(
+                                    pipeline,
+                                    shell_state
+                                        .cmd_history
+                                        .get_latest(0)
+                                        .expect("Cant be empty here"),
+                                ),
                                 Err(e) => eprintln!("{}", e),
                             }
                         }
