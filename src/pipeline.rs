@@ -9,7 +9,7 @@
 use std::{
     io::Write,
     process::{Child, Stdio},
-    thread,
+    thread::{self, JoinHandle},
 };
 
 use crate::{
@@ -29,11 +29,16 @@ enum ChainStdout {
     Discard,
 }
 
-pub fn run_pipeline(pipeline: &[UserCommand], cmd_history: &mut CmdHistory) -> Result<(), String> {
+pub fn start_pipeline(
+    pipeline: &[UserCommand],
+    cmd_history: &mut CmdHistory,
+) -> Result<RunningPipeline, String> {
     let in_pipe = pipeline.len() > 1;
     let sections: Vec<_> = pipeline
         .chunk_by(|a, b| a.is_builtin() == b.is_builtin())
         .collect();
+
+    let mut running_pipeline = RunningPipeline::new();
 
     let mut prev: Option<String> = None;
     for (i, section) in sections.iter().enumerate() {
@@ -61,11 +66,18 @@ pub fn run_pipeline(pipeline: &[UserCommand], cmd_history: &mut CmdHistory) -> R
                 ChainStdout::AsRedirected
             };
             let input = prev.as_deref();
-            run_chain(section, input, stdout)
+            match start_chain(section, input, stdout) {
+                Ok(mut pipeline) => {
+                    running_pipeline.append(&mut pipeline);
+                    None
+                }
+                Err(msg) => Some(msg),
+            }
         };
         prev = output;
     }
-    prev.map_or(Ok(()), Err)
+
+    prev.map_or(Ok(running_pipeline), Err)
 }
 
 /// Runs a builtin in the shell process.
@@ -83,14 +95,58 @@ fn run_builtin(cmd: &UserCommand, in_pipe: bool, cmd_history: &mut CmdHistory) -
     }
 }
 
+pub struct RunningPipeline {
+    children: Vec<Child>,
+    feeders: Vec<JoinHandle<()>>,
+}
+
+impl RunningPipeline {
+    fn new() -> Self {
+        RunningPipeline {
+            children: Vec::new(),
+            feeders: Vec::new(),
+        }
+    }
+    fn append(&mut self, other: &mut Self) {
+        self.children.append(&mut other.children);
+        self.feeders.append(&mut other.feeders);
+    }
+    pub fn wait(self) {
+        wait_on_last(self.children);
+        for feeder in self.feeders {
+            let _ = feeder.join();
+        }
+    }
+
+    pub fn try_wait(&mut self) -> bool {
+        let last_child_status = self
+            .children
+            .last_mut()
+            .expect("Last is never empty")
+            .try_wait();
+        match last_child_status {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(e) => panic!("error attempting to wait: {e}, error case not yet handled"),
+        }
+    }
+    pub fn get_pid(&self) -> u32 {
+        self.children.last().expect("Pipe is never empty").id()
+    }
+}
+
 /// Runs consecutive external commands connected by pipes.
 ///
 /// `input` is fed to the first process; without input it reads from the terminal.
 /// Returns only Error Strings.
-fn run_chain(cmds: &[UserCommand], input: Option<&str>, stdout: ChainStdout) -> Option<String> {
+fn start_chain(
+    cmds: &[UserCommand],
+    input: Option<&str>,
+    stdout: ChainStdout,
+) -> Result<RunningPipeline, String> {
     let mut children = match spawn_chain(cmds, input.is_some(), stdout) {
         Ok(children) => children,
-        Err(msg) => return Some(msg),
+        Err(msg) => return Err(msg),
     };
     // Feed the input from a separate thread: the first process may block on
     // writing its own output before it has read all of its input.
@@ -104,12 +160,15 @@ fn run_chain(cmds: &[UserCommand], input: Option<&str>, stdout: ChainStdout) -> 
             let _ = stdin.write_all(text.as_bytes());
         })
     });
-
-    wait_on_last(children);
-    if let Some(feeder) = feeder {
-        let _ = feeder.join();
-    }
-    None
+    let feeders = if let Some(feeder) = feeder {
+        vec![feeder]
+    } else {
+        Vec::new()
+    };
+    Ok(RunningPipeline {
+        children,
+        feeders: feeders,
+    })
 }
 
 /// Spawns all processes of a chain and connects stdout of each one to stdin
@@ -161,28 +220,11 @@ fn spawn_chain(
 
 /// Waits for the last process and collects its captured stdout and stderr.
 fn wait_on_last(mut children: Vec<Child>) {
-    let mut last = children.pop().expect("chain is never empty");
-
-    // stderr in its own thread, otherwise reading stdout and stderr one after
-    // the other can deadlock when the child fills the stderr pipe buffer.
-    /*let err_reader = last
-        .stderr
-        .take()
-        .map(|e| thread::spawn(move || read_all(e)));
-    // None if stdout goes to the terminal (or was discarded).
-    let out = last.stdout.take().map(read_all).unwrap_or_default(); */
-    let _ = last.wait();
-
-    reap(children);
-
-    /*let err = err_reader
-        .map(|h| h.join().unwrap_or_default())
-        .unwrap_or_default();
-    OutputStrings::new(
-        String::from_utf8_lossy(&out).into_owned(),
-        String::from_utf8_lossy(&err).into_owned(),
-        last_cmd,
-    )*/
+    if !children.is_empty() {
+        let mut last = children.pop().expect("chain is never empty");
+        let _ = last.wait();
+        reap(children);
+    }
 }
 
 /// Stops earlier stages that are still running (e.g. `tail -f`) once the last
