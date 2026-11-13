@@ -14,7 +14,7 @@ use std::{
 
 use crate::{
     ShellState,
-    cmd_parser::{CommandKind, OutputDirection, UserCommand},
+    cmd_parser::{CommandKind, UserCommand},
     output::{self, ensure_newline},
 };
 
@@ -88,6 +88,9 @@ fn run_builtin(cmd: &UserCommand, in_pipe: bool, shell_state: &mut ShellState) -
     let CommandKind::Builtin(builtin) = &cmd.cmd else {
         unreachable!("run_builtin called with external command");
     };
+    // Builtins write nothing to stderr, but like in bash a `2>` target is
+    // still created (or truncated).
+    let _ = output::get_file_from_direction(&cmd.err_direct);
     if in_pipe && builtin.has_sideeffects() {
         String::new()
     } else {
@@ -192,8 +195,9 @@ fn spawn_chain(
             Stdio::piped()
         });
 
-        if is_last && cmd.err_direct != OutputDirection::Terminal {
-            process.stderr(Stdio::piped());
+        // stderr is never chained, so every stage may redirect it.
+        if let Some(file) = output::get_file_from_direction(&cmd.err_direct) {
+            process.stderr(Stdio::from(file));
         }
 
         match process.spawn() {
