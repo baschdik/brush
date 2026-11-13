@@ -182,7 +182,8 @@ pub fn builtin_history(args: &[String], cmd_history: &mut history::CmdHistory) -
 }
 
 pub fn builtin_jobs(jobs: &mut JobsList) -> String {
-    jobs.show()
+    let done_jobs = jobs.reap_finished();
+    jobs.combine_all_jobs(&done_jobs).show()
 }
 
 pub fn builtin_pwd() -> String {

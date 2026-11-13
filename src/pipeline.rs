@@ -102,7 +102,7 @@ pub struct RunningPipeline {
 }
 
 impl RunningPipeline {
-    fn new() -> Self {
+    pub fn new() -> Self {
         RunningPipeline {
             children: Vec::new(),
             feeders: Vec::new(),
