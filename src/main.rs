@@ -12,9 +12,7 @@ mod pipeline;
 mod tokenizer;
 mod userinput;
 
-use crate::{
-    history::HistHandling, output::OutputStrings, pipeline::start_pipeline, tokenizer::RunMode,
-};
+use crate::{history::HistHandling, pipeline::start_pipeline, tokenizer::RunMode};
 use userinput::get_userinput;
 
 pub struct ShellState {

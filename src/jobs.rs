@@ -1,6 +1,6 @@
 use strum::Display;
 
-use crate::{ShellState, history::HistHandling, pipeline::RunningPipeline};
+use crate::pipeline::RunningPipeline;
 
 pub struct Job {
     number: usize,
@@ -15,15 +15,6 @@ enum JobStatus {
     Done,
 }
 
-/*impl std::fmt::Display for JobStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.pad(match self {
-            JobStatus::Running => "Running",
-            JobStatus::Done => "Done",
-        })
-    }
-}*/
-
 pub struct JobsList {
     jobs: Vec<Job>,
 }
@@ -36,7 +27,7 @@ impl JobsList {
         self.jobs.push(Job {
             number: self.jobs.last().map_or(1, |j| j.number + 1),
             pipeline,
-            text: text,
+            text,
             status: JobStatus::Running,
         });
         println!(
@@ -87,7 +78,7 @@ impl JobsList {
     }
 
     pub fn show(&self) -> String {
-        let most_recent_job_no = self.jobs.last().and_then(|job| Some(job.number));
+        let most_recent_job_no = self.jobs.last().map(|job| job.number);
         let Some(most_recent_job_no) = most_recent_job_no else {
             return "".to_string();
         };
@@ -102,7 +93,7 @@ impl JobsList {
                     "[{num}]{recent}  {status}                 {text}\n",
                     num = job.number,
                     recent = format_recent(job.number, most_recent_job_no, second_recent_job_no),
-                    status = job.status.to_string(),
+                    status = job.status,
                     text = format_text(&job.text, &job.status) //width = 24,
                 )[..],
             );

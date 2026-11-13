@@ -48,9 +48,14 @@ impl HistHandling for CmdHistory {
             None => 0,
             Some(n) => n + 1,
         };
+        // Nothing new since the last write: don't add an empty line.
+        if write_from >= self.data.len() {
+            return "".to_string();
+        }
         let history_str = self.data[write_from..].join("\n") + "\n";
         let mut f = File::options()
             .append(true)
+            .create(true)
             .open(path)
             .expect("Failed to open history file!");
         self.line_written_to_file = Some(self.data.len() - 1);

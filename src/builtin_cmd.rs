@@ -132,41 +132,25 @@ pub fn builtin_history(args: &[String], cmd_history: &mut history::CmdHistory) -
 
     impl HistoryArgs {
         fn new(user_str: &[String]) -> Result<HistoryArgs, HistoryArgErrors> {
-            if user_str.is_empty() {
+            let Some(first) = user_str.first() else {
                 return Ok(HistoryArgs::Show);
-            }
-            match &user_str[0][..] {
-                "-r" => {
-                    if user_str.len() >= 3 {
-                        Ok(HistoryArgs::ReadHistory(user_str[1].to_string()))
-                    } else {
-                        Err(HistoryArgErrors::MissingPathArgument(
-                            "Usage: history -r <Path_to_History>".to_string(),
-                        ))
-                    }
-                }
-                "-w" => {
-                    if user_str.len() >= 3 {
-                        Ok(HistoryArgs::WriteHistory(user_str[1].to_string()))
-                    } else {
-                        Err(HistoryArgErrors::MissingPathArgument(
-                            "Usage: history -w <Path_to_History>".to_string(),
-                        ))
-                    }
-                }
-                "-a" => {
-                    if user_str.len() >= 3 {
-                        Ok(HistoryArgs::AppendHistory(user_str[1].to_string()))
-                    } else {
-                        Err(HistoryArgErrors::MissingPathArgument(
-                            "Usage: history -a <Path_to_History>".to_string(),
-                        ))
-                    }
-                }
-                n => match n.parse::<usize>() {
-                    Ok(val) => Ok(HistoryArgs::ShowLast(val)),
-                    Err(_) => Err(HistoryArgErrors::NoIntArg),
-                },
+            };
+            // The path is the argument right after the flag.
+            let path = |flag: &str| {
+                user_str.get(1).cloned().ok_or_else(|| {
+                    HistoryArgErrors::MissingPathArgument(format!(
+                        "Usage: history {flag} <Path_to_History>"
+                    ))
+                })
+            };
+            match first.as_str() {
+                "-r" => path("-r").map(HistoryArgs::ReadHistory),
+                "-w" => path("-w").map(HistoryArgs::WriteHistory),
+                "-a" => path("-a").map(HistoryArgs::AppendHistory),
+                n => n
+                    .parse::<usize>()
+                    .map(HistoryArgs::ShowLast)
+                    .map_err(|_| HistoryArgErrors::NoIntArg),
             }
         }
     }

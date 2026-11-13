@@ -15,7 +15,6 @@ use std::{
 use crate::{
     ShellState,
     cmd_parser::{CommandKind, OutputDirection, UserCommand},
-    history::CmdHistory,
     output::{self, ensure_newline},
 };
 
@@ -145,10 +144,8 @@ fn start_chain(
     input: Option<&str>,
     stdout: ChainStdout,
 ) -> Result<RunningPipeline, String> {
-    let mut children = match spawn_chain(cmds, input.is_some(), stdout) {
-        Ok(children) => children,
-        Err(msg) => return Err(msg),
-    };
+    let mut children = spawn_chain(cmds, input.is_some(), stdout)?;
+
     // Feed the input from a separate thread: the first process may block on
     // writing its own output before it has read all of its input.
     let feeder = input.map(|text| {
@@ -166,10 +163,7 @@ fn start_chain(
     } else {
         Vec::new()
     };
-    Ok(RunningPipeline {
-        children,
-        feeders: feeders,
-    })
+    Ok(RunningPipeline { children, feeders })
 }
 
 /// Spawns all processes of a chain and connects stdout of each one to stdin
