@@ -34,10 +34,15 @@ impl JobsList {
     }
     pub fn show(&self) -> String {
         let most_recent_job_no = self.jobs.last().and_then(|job| Some(job.number));
-
         let Some(most_recent_job_no) = most_recent_job_no else {
             return "".to_string();
         };
+
+        let second_recent_job_no = self
+            .jobs
+            .get(self.jobs.len() - 2)
+            .and_then(|job| Some(job.number));
+
         let mut out = String::new();
 
         for job in &self.jobs {
@@ -45,11 +50,7 @@ impl JobsList {
                 &format!(
                     "[{num}]{recent}  {status:width$}{text}\n",
                     num = job.number,
-                    recent = if job.number == most_recent_job_no {
-                        "+"
-                    } else {
-                        " "
-                    },
+                    recent = format_recent(job.number, most_recent_job_no, second_recent_job_no),
                     status = job.status,
                     text = job.text,
                     width = 24,
@@ -58,6 +59,7 @@ impl JobsList {
         }
         out
     }
+
     /*pub fn reap_finished(&mut self) {
         for job in &mut self.jobs {
             if job.pipeline.try_wait() {
@@ -65,4 +67,14 @@ impl JobsList {
             }
         }
     }*/
+}
+
+fn format_recent(job_no: usize, most_recent: usize, sec_recent: Option<usize>) -> &'static str {
+    if job_no == most_recent {
+        "+"
+    } else if sec_recent == Some(job_no) {
+        "-"
+    } else {
+        " "
+    }
 }
