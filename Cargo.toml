@@ -14,3 +14,7 @@ strum = { version = "0.28.0", features = ["derive"] }
 termion = "4.0.6"
 thiserror = "1.0.38"                             # error handling
 use = "0.0.1-pre.0"
+
+[dev-dependencies]
+rexpect = "0.7.1"
+tempfile = "3.27.0"
